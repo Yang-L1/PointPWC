@@ -65,34 +65,28 @@ def main():
     blue = lambda x: '\033[94m' + x + '\033[0m'
     model = PointConvSceneFlow()
 
-    train_dataset = datasets.__dict__[args.dataset](
-        train=True,
-        transform=transforms.Augmentation(args.aug_together,
-                                            args.aug_pc2,
-                                            args.data_process,
-                                            args.num_points),
-        num_points=args.num_points,
-        data_root = args.data_root,
-        full=args.full
-    )
+    from datasets._4DMatch import _4DMatch
+
+    train_dataset = _4DMatch("train")
+
     logger.info('train_dataset: ' + str(train_dataset))
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
+        batch_size=8,
         shuffle=True,
         num_workers=args.workers,
         pin_memory=True,
         worker_init_fn=lambda x: np.random.seed((torch.initial_seed()) % (2 ** 32))
     )
 
-    val_dataset = datasets.__dict__[args.dataset](
-        train=False,
-        transform=transforms.ProcessData(args.data_process,
-                                         args.num_points,
-                                         args.allow_less_points),
-        num_points=args.num_points,
-        data_root = args.data_root
-    )
+    # val_dataset = datasets.__dict__[args.dataset](
+    #     train=False,
+    #     transform=transforms.ProcessData(args.data_process,
+    #                                      args.num_points,
+    #                                      args.allow_less_points),
+    #     num_points=args.num_points,
+    #     data_root = args.data_root
+    # )
     logger.info('val_dataset: ' + str(val_dataset))
     val_loader = torch.utils.data.DataLoader(
         val_dataset,

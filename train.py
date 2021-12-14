@@ -21,8 +21,7 @@ from models import multiScaleLoss
 from pathlib import Path
 from collections import defaultdict
 
-import transforms
-import datasets
+
 import cmd_args 
 from main_utils import *
 
@@ -34,12 +33,11 @@ def main():
     global args 
     args = cmd_args.parse_args_from_yaml(sys.argv[1])
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu if args.multi_gpu is None else '0,1'
 
     '''CREATE DIR'''
     experiment_dir = Path('./experiment/')
     experiment_dir.mkdir(exist_ok=True)
-    file_dir = Path(str(experiment_dir) + '/PointConv%sFlyingthings3d-'%args.model_name + str(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')))
+    file_dir = Path(str(experiment_dir) + '/4dmatch'+ str(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')))
     file_dir.mkdir(exist_ok=True)
     checkpoints_dir = file_dir.joinpath('checkpoints/')
     checkpoints_dir.mkdir(exist_ok=True)
@@ -72,21 +70,14 @@ def main():
     logger.info('train_dataset: ' + str(train_dataset))
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        batch_size=8,
+        batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.workers,
         pin_memory=True,
         worker_init_fn=lambda x: np.random.seed((torch.initial_seed()) % (2 ** 32))
     )
 
-    # val_dataset = datasets.__dict__[args.dataset](
-    #     train=False,
-    #     transform=transforms.ProcessData(args.data_process,
-    #                                      args.num_points,
-    #                                      args.allow_less_points),
-    #     num_points=args.num_points,
-    #     data_root = args.data_root
-    # )
+    val_dataset = _4DMatch("val")
     logger.info('val_dataset: ' + str(val_dataset))
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
@@ -145,7 +136,7 @@ def main():
             pos2 = pos2.cuda() 
             norm1 = norm1.cuda()
             norm2 = norm2.cuda()
-            flow = flow.cuda() 
+            flow = flow.cuda()
 
             model = model.train() 
             pred_flows, fps_pc1_idxs, _, _, _ = model(pos1, pos2, norm1, norm2)
@@ -159,6 +150,7 @@ def main():
 
             total_loss += loss.cpu().data * args.batch_size
             total_seen += args.batch_size
+
 
         scheduler.step()
 

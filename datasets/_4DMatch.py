@@ -74,7 +74,7 @@ class _4DMatch(Dataset):
         if "metric_index" in entry:
             metric_index = entry['metric_index'].squeeze()
         else:
-            metric_index = None
+            metric_index = np.array([0])
 
 
         if (trans.ndim == 1):
@@ -104,7 +104,7 @@ class _4DMatch(Dataset):
                           scale_factor=1, mode='2ddash', line_width=1.)
             mlab.show()
 
-        return src_pcd, tgt_pcd, sflow, metric_index
+        return src_pcd, tgt_pcd, src_pcd.copy(), tgt_pcd.copy(), sflow, metric_index
 
     def subsample(self, pc1, pc2, sflow):
         indice1 = np.arange(pc1.shape[0])

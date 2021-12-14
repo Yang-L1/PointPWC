@@ -17,8 +17,6 @@ def postprocess(args):
     args.allow_less_points = hasattr(args, 'allow_less_points') and args.allow_less_points
 
     # -------------------- dataset --------------------
-    assert (args.dataset in dataset_names)
-    assert hasattr(args, 'data_root')
     # -------------------- learning --------------------
     if not args.evaluate:
         # -------------------- init --------------------

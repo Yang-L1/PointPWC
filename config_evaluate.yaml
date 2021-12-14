@@ -7,7 +7,7 @@ full: False
 
 evaluate: True
 resume: True
-ckpt_dir: ./pretrain_weights/
+ckpt_dir: /home/liyang/workspace/baselines/PointPWC/experiment/4dmatch2021-12-13_22-57/checkpoints/
 
 arch: PointConv
 last_relu: False
@@ -15,7 +15,7 @@ allow_less_points: False
 
 # general args
 batch_size: 1
-pretrain: PointConv_726_0.0463.pth 
+pretrain: PointConv_022_0.2720.pth
 dim: 3
 num_points: 8192
 

@@ -22,12 +22,133 @@ from models import multiScaleLoss
 from pathlib import Path
 from collections import defaultdict
 
-import transforms
-import datasets
-import cmd_args 
+
+import cmd_args
 from main_utils import *
 from utils import geometry
 from evaluation_utils import evaluate_2d, evaluate_3d
+
+
+def compute_inlier_ratio(flow_pred, flow_gt, inlier_thr=0.04, s2t_flow=None):
+    inlier = torch.sum((flow_pred - flow_gt) ** 2, dim=2) < inlier_thr ** 2
+    IR = inlier.sum().float() /( inlier.shape[0] * inlier.shape[1])
+    return IR
+
+
+def partition_arg_topK(matrix, K, axis=0):
+    """ find index of K smallest entries along a axis
+    perform topK based on np.argpartition
+    :param matrix: to be sorted
+    :param K: select and sort the top K items
+    :param axis: 0 or 1. dimension to be sorted.
+    :return:
+    """
+    a_part = np.argpartition(matrix, K, axis=axis)
+    if axis == 0:
+        row_index = np.arange(matrix.shape[1 - axis])
+        a_sec_argsort_K = np.argsort(matrix[a_part[0:K, :], row_index], axis=axis)
+        return a_part[0:K, :][a_sec_argsort_K, row_index]
+    else:
+        column_index = np.arange(matrix.shape[1 - axis])[:, None]
+        a_sec_argsort_K = np.argsort(matrix[column_index, a_part[:, 0:K]], axis=axis)
+        return a_part[:, 0:K][column_index, a_sec_argsort_K]
+
+def knn_point_np(k, reference_pts, query_pts):
+    '''
+    :param k: number of k in k-nn search
+    :param reference_pts: (N, 3) float32 array, input points
+    :param query_pts: (M, 3) float32 array, query points
+    :return:
+        val: (batch_size, npoint, k) float32 array, L2 distances
+        idx: (batch_size, npoint, k) int32 array, indices to input points
+    '''
+
+    N, _ = reference_pts.shape
+    M, _ = query_pts.shape
+    reference_pts = reference_pts.reshape(1, N, -1).repeat(M, axis=0)
+    query_pts = query_pts.reshape(M, 1, -1).repeat(N, axis=1)
+    dist = np.sum((reference_pts - query_pts) ** 2, -1)
+    idx = partition_arg_topK(dist, K=k, axis=1)
+    val = np.take_along_axis ( dist , idx, axis=1)
+    return np.sqrt(val), idx
+
+
+def blend_anchor_motion (query_loc, reference_loc, reference_flow , knn=3, search_radius=0.1) :
+    '''approximate flow on query points
+    this function assume query points are sub- or un-sampled from reference locations
+    @param query_loc:[m,3]
+    @param reference_loc:[n,3]
+    @param reference_flow:[n,3]
+    @param knn:
+    @return:
+        blended_flow:[m,3]
+    '''
+    # from datasets.utils import knn_point_np
+    dists, idx = knn_point_np (knn, reference_loc, query_loc)
+    dists[dists < 1e-10] = 1e-10
+    mask = dists>search_radius
+    dists[mask] = 1e+10
+    weight = 1.0 / dists
+    weight = weight / np.sum(weight, -1, keepdims=True)  # [B,N,3]
+    blended_flow = np.sum (reference_flow [idx] * weight.reshape ([-1, knn, 1]), axis=1, keepdims=False)
+
+    mask = mask.sum(axis=1)<3
+
+    return blended_flow, mask
+
+def compute_nrfmr(s_pcd, flow_pred, src_pcd_raw, sflow_raw, metric_index_list, recall_thr=0.04):
+
+
+
+
+    nrfmr = 0.
+
+    for i in range ( len(s_pcd)):
+
+        # get the metric points' transformed position
+        metric_index = metric_index_list[i]
+        sflow = sflow_raw[i]
+        s_pcd_raw_i = src_pcd_raw[i]
+        metric_pcd = s_pcd_raw_i [ metric_index ]
+        metric_sflow = sflow [ metric_index ]
+        metric_pcd_wrapped_gt = metric_pcd + metric_sflow
+        # metric_pcd_wrapped_gt = ( torch.matmul( batched_rot[i], metric_pcd_deformed.T) + batched_trn[i] ).T
+
+
+        # use the match prediction as the motion anchor
+        motion_pred = flow_pred[i]
+        metric_motion_pred, valid_mask = blend_anchor_motion(
+            metric_pcd.cpu().numpy(), s_pcd[i].cpu().numpy(), motion_pred.cpu().numpy(), knn=3, search_radius=0.1)
+        metric_pcd_wrapped_pred = metric_pcd + torch.from_numpy(metric_motion_pred).to(metric_pcd)
+
+        debug = F
+        if debug:
+            import mayavi.mlab as mlab
+            c_red = (224. / 255., 0 / 255., 125 / 255.)
+            c_pink = (224. / 255., 75. / 255., 232. / 255.)
+            c_blue = (0. / 255., 0. / 255., 255. / 255.)
+            scale_factor = 0.013
+            metric_pcd_wrapped_gt = metric_pcd_wrapped_gt.cpu()
+            metric_pcd_wrapped_pred = metric_pcd_wrapped_pred.cpu()
+            err = metric_pcd_wrapped_pred - metric_pcd_wrapped_gt
+            mlab.points3d(metric_pcd[:, 0], metric_pcd[:, 1], metric_pcd[:, 2], scale_factor=scale_factor, color=c_red)
+            mlab.points3d(metric_pcd_wrapped_gt[:, 0], metric_pcd_wrapped_gt[:, 1], metric_pcd_wrapped_gt[:, 2], scale_factor=scale_factor, color=c_pink)
+            mlab.points3d(metric_pcd_wrapped_pred[ :, 0] , metric_pcd_wrapped_pred[ :, 1], metric_pcd_wrapped_pred[:,  2], scale_factor=scale_factor , color=c_blue)
+            mlab.quiver3d(metric_pcd_wrapped_gt[:, 0], metric_pcd_wrapped_gt[:, 1], metric_pcd_wrapped_gt[:, 2], err[:, 0], err[:, 1], err[:, 2],
+                          scale_factor=1, mode='2ddash', line_width=1.)
+            mlab.show()
+
+        dist = torch.sqrt( torch.sum( (metric_pcd_wrapped_pred - metric_pcd_wrapped_gt)**2, dim=1 ) )
+
+        r = (dist < recall_thr).float().sum() / len(dist)
+        nrfmr = nrfmr + r
+
+    nrfmr = nrfmr /len(s_pcd)
+
+    return  nrfmr
+
+
+
 
 def main():
 
@@ -38,7 +159,6 @@ def main():
     global args 
     args = cmd_args.parse_args_from_yaml(sys.argv[1])
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu if args.multi_gpu is None else '0,1,2,3'
 
     '''CREATE DIR'''
     experiment_dir = Path('./Evaluate_experiment/')
@@ -69,14 +189,9 @@ def main():
     blue = lambda x: '\033[94m' + x + '\033[0m'
     model = PointConvSceneFlow()
 
-    val_dataset = datasets.__dict__[args.dataset](
-        train=False,
-        transform=transforms.ProcessData(args.data_process,
-                                         args.num_points,
-                                         args.allow_less_points),
-        num_points=args.num_points,
-        data_root = args.data_root
-    )
+    from datasets._4DMatch import _4DMatch
+    val_dataset = _4DMatch("test")
+
     logger.info('val_dataset: ' + str(val_dataset))
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
@@ -107,8 +222,12 @@ def main():
     total_seen = 0
     total_epe = 0
     metrics = defaultdict(lambda:list())
+
+    IR=0.
+    NFMR=0.
+
     for i, data in tqdm(enumerate(val_loader, 0), total=len(val_loader), smoothing=0.9):
-        pos1, pos2, norm1, norm2, flow, path = data  
+        pos1, pos2, norm1, norm2, flow, src_pcd_raw, sflow_raw, metric_index = data
 
         #move to cuda 
         pos1 = pos1.cuda()
@@ -126,6 +245,9 @@ def main():
             full_flow = pred_flows[0].permute(0, 2, 1)
             epe3d = torch.norm(full_flow - flow, dim = 2).mean()
 
+        i_rate = compute_inlier_ratio(full_flow, flow,inlier_thr=0.04)
+        nfmr = compute_nrfmr(pos1, full_flow,  src_pcd_raw, sflow_raw, metric_index)
+
         total_loss += loss.cpu().data * args.batch_size
         total_epe += epe3d.cpu().data * args.batch_size
         total_seen += args.batch_size
@@ -142,15 +264,13 @@ def main():
         acc3d_relaxs.update(acc3d_relax)
         outliers.update(outlier)
 
-        # 2D evaluation metrics
-        flow_pred, flow_gt = geometry.get_batch_2d_flow(pc1_np,
-                                                        pc1_np+sf_np,
-                                                        pc1_np+pred_sf,
-                                                        path)
-        EPE2D, acc2d = evaluate_2d(flow_pred, flow_gt)
 
-        epe2ds.update(EPE2D)
-        acc2ds.update(acc2d)
+        IR+=i_rate
+        NFMR +=nfmr
+
+
+    IR = IR/len(val_loader)
+    NFMR = NFMR/len(val_loader)
 
     mean_loss = total_loss / total_seen
     mean_epe = total_epe / total_seen
@@ -161,19 +281,17 @@ def main():
     res_str = (' * EPE3D {epe3d_.avg:.4f}\t'
                'ACC3DS {acc3d_s.avg:.4f}\t'
                'ACC3DR {acc3d_r.avg:.4f}\t'
-               'Outliers3D {outlier_.avg:.4f}\t'
-               'EPE2D {epe2d_.avg:.4f}\t'
-               'ACC2D {acc2d_.avg:.4f}'
+               'Outliers3D {outlier_.avg:.4f}'
                .format(
                        epe3d_=epe3ds,
                        acc3d_s=acc3d_stricts,
                        acc3d_r=acc3d_relaxs,
-                       outlier_=outliers,
-                       epe2d_=epe2ds,
-                       acc2d_=acc2ds
+                       outlier_=outliers
                        ))
 
     print(res_str)
+    print( "IR:", IR, "NFMR:", NFMR)
+
     logger.info(res_str)
 
 

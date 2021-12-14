@@ -89,6 +89,10 @@ class _4DMatch(Dataset):
         trans = trans.astype(np.float32)
         sflow = (np.matmul(rot, (src_pcd + s2t_flow).T ) + trans ).T - src_pcd
 
+        src_pcd_raw = src_pcd
+        sflow_raw=sflow
+
+
         src_pcd, tgt_pcd, sflow = self.subsample(src_pcd, tgt_pcd,sflow)
 
 
@@ -104,7 +108,7 @@ class _4DMatch(Dataset):
                           scale_factor=1, mode='2ddash', line_width=1.)
             mlab.show()
 
-        return src_pcd, tgt_pcd, src_pcd.copy(), tgt_pcd.copy(), sflow, metric_index
+        return src_pcd, tgt_pcd, src_pcd.copy(), tgt_pcd.copy(), sflow, src_pcd_raw, sflow_raw, metric_index
 
     def subsample(self, pc1, pc2, sflow):
         indice1 = np.arange(pc1.shape[0])
